@@ -112,6 +112,12 @@ void GDScriptOptimiser::register_freed_slot(SiblingSlotPool& r_pool, const Strin
 	r_pool.free_slots.push_back(slot);
 }
 
+void GDScriptOptimiser::register_freed_slot_range(SiblingSlotPool& r_pool, uint32_t p_base, uint32_t p_count, int p_freed_at_ip) {
+	for (uint32_t i = 0; i < p_count; i++) {
+		register_freed_slot(r_pool, StringName(), p_base + i, p_freed_at_ip);
+	}
+}
+
 uint64_t GDScriptOptimiser::new_inline_generation() {
 	return ++_generation_counter;
 }

@@ -2359,14 +2359,11 @@ Error GDScriptCompiler::_emit_inline_call(CodeGen& codegen, const GDScriptParser
 #endif
 	codegen.start_block();
 
-	///NOTE:!!! SSR doesn't run post inlining for now!!!
-	///it would go CRAZY if it did, but i tried last time and had a really weird bug
-	///where some phantom temporary would get popped off before it was assigned to(???)
-	///so i'm skipping that step for now.
-	///just something to consider for later!
 	GDScriptOptimiser::SiblingSlotPool inline_pool;
 	inline_pool.inline_generation = GDScriptOptimiser::new_inline_generation();
-	(void)p_sibling_pool;
+
+	GDScriptByteCodeGenerator* bytecode_gen = static_cast<GDScriptByteCodeGenerator*>(codegen.generator);
+	uint32_t locals_top_before_inline = bytecode_gen->get_locals_top();
 
 	const GDScriptParser::FunctionNode* saved_function_node = codegen.function_node;
 	codegen.function_node = p_target;
@@ -2414,6 +2411,9 @@ Error GDScriptCompiler::_emit_inline_call(CodeGen& codegen, const GDScriptParser
 	///splice gaming 2026
 	err = _parse_block(codegen, p_target->body, /*add_locals=*/true, /*clear_locals=*/true, &inline_pool);
 
+	///snapshot locals at peak, must do it here before end_block() shrinks em
+	uint32_t locals_top_peak_inline = bytecode_gen->get_locals_top();
+
 	codegen.function_node = saved_function_node;
 	codegen.inline_call_depth--;
 	codegen.inline_call_stack.resize(codegen.inline_call_stack.size() - 1);
@@ -2424,6 +2424,18 @@ Error GDScriptCompiler::_emit_inline_call(CodeGen& codegen, const GDScriptParser
 	}
 
 	codegen.end_block();
+
+	///sooo the stack frame just collapsed.
+	///everything in [locals_top_before_inline, locals_top_peak_inline) is now dead,
+	///so we can hand it to the outer sibling pool so the next sibling can reuse those slotsW
+	if (p_sibling_pool != nullptr) {
+		uint32_t freed_count = locals_top_peak_inline - locals_top_before_inline;
+		if (freed_count > 0) {
+			int freed_at_ip = gen->get_current_ip();
+			GDScriptOptimiser::register_freed_slot_range(*p_sibling_pool, locals_top_before_inline, freed_count, freed_at_ip);
+		}
+	}
+
 	gen->end_inline_call();
 #ifdef DEBUG_ENABLED
 	gen->end_inline_call_debug();
@@ -2481,6 +2493,8 @@ Error GDScriptCompiler::_parse_block(CodeGen &codegen, const GDScriptParser::Sui
 
 				// Now we can actually start testing.
 				// For each branch.
+				GDScriptOptimiser::SiblingSlotPool match_pool;
+				match_pool.inline_generation = GDScriptOptimiser::new_inline_generation();
 				for (uint32_t j = 0; j < match->branches.size(); j++) {
 					if (j > 0) {
 						// Use `else` to not check the next branch after matching.
@@ -2492,7 +2506,7 @@ Error GDScriptCompiler::_parse_block(CodeGen &codegen, const GDScriptParser::Sui
 					codegen.start_block(); // Add an extra block, since binds belong to the match branch scope.
 
 					// Add locals in block before patterns, so temporaries don't use the stack address for binds.
-					List<GDScriptCodeGenerator::Address> branch_locals = _add_block_locals(codegen, branch->block);
+					List<GDScriptCodeGenerator::Address> branch_locals = _add_block_locals(codegen, branch->block, &match_pool);
 
 					gen->write_newline(branch->start_line);
 
@@ -2537,7 +2551,7 @@ Error GDScriptCompiler::_parse_block(CodeGen &codegen, const GDScriptParser::Sui
 						return err;
 					}
 
-					_clear_block_locals(codegen, branch_locals);
+					_clear_block_locals(codegen, branch_locals, &match_pool);
 
 					codegen.end_block(); // Get out of extra block for binds.
 				}
@@ -2629,7 +2643,7 @@ Error GDScriptCompiler::_parse_block(CodeGen &codegen, const GDScriptParser::Sui
 				gen->write_for(iterator, for_n->use_conversion_assign, range_call != nullptr);
 
 				// Loop variables must be cleared even when `break`/`continue` is used.
-				List<GDScriptCodeGenerator::Address> loop_locals = _add_block_locals(codegen, for_n->loop);
+				List<GDScriptCodeGenerator::Address> loop_locals = _add_block_locals(codegen, for_n->loop, p_sibling_pool);
 
 				//_clear_block_locals(codegen, loop_locals); // Inside loop, before block - for `continue`. // TODO
 
@@ -2640,7 +2654,7 @@ Error GDScriptCompiler::_parse_block(CodeGen &codegen, const GDScriptParser::Sui
 
 				gen->write_endfor(range_call != nullptr);
 
-				_clear_block_locals(codegen, loop_locals); // Outside loop, after block - for `break` and normal exit.
+				_clear_block_locals(codegen, loop_locals, p_sibling_pool); // Outside loop, after block - for `break` and normal exit.
 
 				codegen.end_block(); // Get out of extra block for loop iterator, @special locals, and custom locals clearing.
 			} break;
@@ -2663,7 +2677,7 @@ Error GDScriptCompiler::_parse_block(CodeGen &codegen, const GDScriptParser::Sui
 				}
 
 				// Loop variables must be cleared even when `break`/`continue` is used.
-				List<GDScriptCodeGenerator::Address> loop_locals = _add_block_locals(codegen, while_n->loop);
+				List<GDScriptCodeGenerator::Address> loop_locals = _add_block_locals(codegen, while_n->loop, p_sibling_pool);
 
 				//_clear_block_locals(codegen, loop_locals); // Inside loop, before block - for `continue`. // TODO
 
@@ -2674,7 +2688,7 @@ Error GDScriptCompiler::_parse_block(CodeGen &codegen, const GDScriptParser::Sui
 
 				gen->write_endwhile();
 
-				_clear_block_locals(codegen, loop_locals); // Outside loop, after block - for `break` and normal exit.
+				_clear_block_locals(codegen, loop_locals, p_sibling_pool); // Outside loop, after block - for `break` and normal exit.
 
 				codegen.end_block(); // Get out of extra block for custom locals clearing.
 			} break;
@@ -3757,8 +3771,8 @@ Error GDScriptCompiler::_compile_class(GDScript *p_script, const GDScriptParser:
 	//validate instances if keeping state
 
 	if (p_keep_state) {
-		for (SelfList<GDScriptInstance> *E = p_script->instances.first(); E; E = E->next()) {
-			E->self()->reload_members();
+		for (GDScriptInstance &instance : p_script->instances) {
+			instance.reload_members();
 		}
 	}
 #endif //DEBUG_ENABLED

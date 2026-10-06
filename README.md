@@ -3,7 +3,7 @@ This version of Reginleif will not compile correctly, unless provided with the S
 This is intended only for Take Your Time Studios.
 
 # Reginleif Engine
-hello hello! this is a little fork made for me and my friends! 'twas made because GDScript was a *little* lacking, and i discovered i had the free will to do things my way! what *is* my way, you ask? well, i've always had a love-hate relationship with GDScript. i truly love the rapid iteration capabilities it offers, but ah well, it lacks a *few* features, *ahem*, to help build the kind of systems heavy games i want to make.
+hello hello! Reginleif (pronounced, 'rain-leaf') is a little fork made for me and my friends! 'twas made because GDScript was a *little* lacking, and i discovered i had the free will to do things my way! what *is* my way, you ask? well, i've always had a love-hate relationship with GDScript. i truly love the rapid iteration capabilities it offers, but ah well, it lacks a *few* features, *ahem*, to help build the kind of systems heavy games i want to make.
 
 tell ya what, mate. while writing gdscript across half a decade, it felt like my dumbass was being forced to accept a tradeoff that the developers had made. the tradeoff being that the language optimised the developer experience for the first fifty hours of gamedev, and did so by horribly compromising on the next thousand.
 
@@ -44,6 +44,7 @@ If you don't want to go through the hassle of all that, I periodically throw a f
 - traits (first pass + optimisation passes)
 - some minor syntax niceties
 - some nontrivial optimisations
+- some PRs I merged that targeted upstream
 
 ## How to use the shit I added
 
@@ -235,6 +236,8 @@ have fuuun with that!
 ### Traits
 Traits are a feature that let you specify compile-time contracts of behaviour to either your own types or (as a form of ad-hoc polymorphism) apply them to Godot's existent types. This feature is extremely similar to what is known as 'interfaces' in other languages, and is heavily inspired by a certain other programming language's implementation of traits.
 
+**Traits cannot have generics applied on them yet.** This will be addressed soon.
+
 #### how to declare a trait
 you can only declare a trait in a new file. create a new gdscript file (a new extension is not required), and write `trait` followed by the name of the trait:
 ```gdscript
@@ -381,25 +384,32 @@ most people aren't really interested in the technical side of perf, so I'll keep
 - compiler discarded away property access type info... the runtime had no idea what it was accessing and thus had to query classDB on every set/get. this info is now baked into the compile-time whenever sufficient type info is available, skipping a bunch of runtime bullshit. property set/get is now a lot faster!
 - small-ish functions on the same script/inheritance tree that are safe to inline are now inlined aggressively. This is a significant boost to speed, as it completely skips call overhead from several different layers of abstractions. Probably the single biggest boost to raw execution speed in this fork. This can be turned off in the project settings.
 
+#### fun PRs that have been merged that aren't upstream
+Thanks to being a fork and not a transpiler or a gdextension, I have quite a bit of power, some power that I'll gladly let you experience for yourself, wink wink.
+I thank these contributors from upstream from the bottom of my heart for their work:
+- Hilderin's and ColinSORourke's PR-116368, `Fix Tool Script behaviors requiring restart`, has been merged, and will let you make toolscripts that just work on the go without needing you to restart the editor.
+- yahkr's PR-84018, `Add the ability to expose nodes for direct access in instantiated scenes`, lets you create 'exposed nodes', which are nodes that you can expose to the scene tree when their scene is instantiated. It's like the editable children feature, but much more scoped and powerful. Try it out, it makes for much better scene architecture!
+- ydeltastar's PR-99927, `Improve the material preview in the inspector` makes the 3D editor preview a lot better, actually showing what the object would look like in an environment.
 
-### Some more caveats
-- Godot's `core` is rotten. Generics can LIE to you at runtime because static analysis is turned off for Variant-typed variables!!! (I didn't add this, this is Godot's default behaviour) Use static typing everywhere lest you want to run into undefined behaviour with generics.
-- Dynamic trait dispatch as a return position is not supported. `-> impl Trait` specifically. you should bound this to a generic and return that generic type instead. this will be fixed in future passes.
-- I'm not fucking omniscient bro. There might be bugs, and I ask you to REPORT THEM!! catch my ass on discord at monarch_zero or open an issue here.
+This list will be snipped off as these PRs eventually get merged upstream.
+
+### This is a non standard, and experimental fork.
+Look, I'm just one unemployed college kid, alright? I'm human, I make mistakes, blah blah, this is the part where I tell you, hey, this fork is only actively used by like 10~ or so people. There COULD be bugs. I ask you report them, please. Sometimes there are periods when I go on for long periods without bugfixing or developing, and that's usually because I have either exams, a game jam or some other project of mine coming up.
+
+I'm a game developer just like you. I make games all the time. Making games clashes with working on this project. Understandable, yeah? 
+Hopefully you like it too when the developer of an engine fork makes games with said fork himself?
 
 ## Backwards compat breaks
 There are none known so far that have not been fixed. Yay!
 
-
 ## Motivation
-
 Why not contribute to Godot upstream itself? Well, I WANT to. But I have a few issues with that...
 
 0. GDScript dev team and I will probably never see eye-to-eye. We are solar systems apart with our philosophy towards languages. In what way, you ask? Ah, let me ramble a bit. I generally believe that beginner-friendliness should not come at the cost of correctness or large-scale scalability. The language should *let you grow.* I also think that this difference in interests is fine, that's what the magic of open source is. 
 1. I want traits, sum types, exhaustive matching, structs (and not in the "just make object leaner" way), PROPER ERROR HANDLING, tuples, stronger static guarantees, hell I'd even be delighted if GDScript dropped dynamic typing altogether, as I largely consider that to be a beginner trap. I am very glad that the Godot project is at least open-source, so that I may leech off of upstream and add my own changes. This project exists as a 'here you go!' for people who want the same rapid-iteration power GDScript is known for while allowing expression of stronger invariants, without bending knees to C#.
 2. Godot PR review is GLACIAL. By glacial I do mean INSANELY GLACIAL. New features take YEARS to be accepted. The dev team actually just hates it when you touch `core`. I won't pretend they're evil and do it just because they're lazy or something (cough cough Redot), they have very real reasons to take as much time as they take, Godot being the backbone of millions of indie gamedevs around. but obviously I'm unhappy with the pace, so I'll go ahead implementing some of these myself.
-3. I want the freedom to make mistakes with my PRs. I don't like C++ as a language and how much it relies to on me being completely fucking omniscient. Speaking of which...
-4. If I had a Rust dependency (something the Godot team will never accept) later on like Cranelift to enable JITs, I want a platform to be able to do that.
+3. I want the freedom to make mistakes with my PRs. Speaking of which...
+4. If I had a Rust dependency later on like Cranelift to enable JITs, I want a platform to be able to do that.
 5. I also just want to have fun adding silly little things! Professionalism is the antithesis of fun. I want the freedom to add a little life to the engine.
 6. Lastly, I have an amazing group of gamedev friends who have a vested interest in this specific project. 
 
@@ -408,6 +418,9 @@ because i don't wanna. if you want to, good! go ahead.
 
 ## you should've waited for GDType/Big Core Rewrite/Godot 5/Weekly Steel Ball Run
 i don't wanna. i prioritise usability now. i'm not saying GDType and shit are bad, i'm saying i'm an impatient kid.
+
+### Let's be friends!
+Hey, if you liked my work, seriously, we can hang out! Let's be friends! Discord: monarch_zero
 
 ## special thanks
 - the Free Will dev team, for stress-testing this fork

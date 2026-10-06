@@ -39,206 +39,74 @@ struct ContainerType {
 	Variant::Type variant_type = Variant::NIL;
 	StringName class_name;
 	Ref<Script> script;
+
+	_FORCE_INLINE_ bool operator==(const ContainerType &p_type) const {
+		return variant_type == p_type.variant_type && class_name == p_type.class_name && script == p_type.script;
+	}
+	_FORCE_INLINE_ bool operator!=(const ContainerType &p_type) const {
+		return variant_type != p_type.variant_type || class_name != p_type.class_name || script != p_type.script;
+	}
 };
-
-struct ContainerTypeValidate {
-	/// [Monarch] Imagine there's an `Array[Array[int]]`. This `variant_type` field says that the top-level type
-	///           is an `Array`.
-	Variant::Type variant_type = Variant::NIL;
-	StringName class_name;
-	Ref<Script> script;
-
-	/// [Monarch] Following the previous example, this `nested_type` argument holds types, so from that example,
-	///           this field would be a type validation field that holds an Array in it as its `variant_type`.
-	///           Recursive typing, in the simplest sense.
+struct ContainerTypeValidate : ContainerType {
+	/// [Monarch] Imagine there's an `Array[Array[int]]`. `variant_type` (inherited) says the top-level
+	///           type is an `Array`. `nested_types` holds the validators for what's inside, recursively.
 	Vector<ContainerTypeValidate> nested_types;
 
 	const char *where = "container";
 
 private:
 	struct TypePair {
-		const ContainerTypeValidate* lhs = nullptr;
-		const ContainerTypeValidate* rhs = nullptr;
+		const ContainerTypeValidate *lhs = nullptr;
+		const ContainerTypeValidate *rhs = nullptr;
 	};
 
-	_FORCE_INLINE_ bool _internal_validate(Variant &r_inout_variant, const char *p_operation, bool p_output_errors) const {
+	const Variant *_internal_convert_variant(const Variant &p_variant, Variant &r_tmp_variant, const char *p_operation, bool p_output_errors) const;
+	_FORCE_INLINE_ const Variant *_internal_validate(const Variant &p_variant, Variant &r_tmp_variant, const char *p_operation, bool p_output_errors) const {
 		if (variant_type == Variant::NIL) {
-			return true;
+			return &p_variant;
 		}
-
-		if (variant_type != r_inout_variant.get_type()) {
-			if (r_inout_variant.get_type() == Variant::NIL && variant_type == Variant::OBJECT) {
-				return true;
+		if (p_variant.get_type() != variant_type) {
+			if (p_variant.get_type() == Variant::NIL && variant_type == Variant::OBJECT) {
+				return &p_variant;
 			}
-
-			if (Variant::can_convert_strict(r_inout_variant.get_type(), variant_type)) {
-				Variant converted_to;
-				const Variant *converted_from = &r_inout_variant;
-				Callable::CallError call_error;
-				Variant::construct(variant_type, converted_to, &converted_from, 1, call_error);
-
-				if (call_error.error == Callable::CallError::CALL_OK) {
-					r_inout_variant = converted_to;
-					return true;
-				}
-			}
-
-			if (p_output_errors) {
-				ERR_FAIL_V_MSG(false, vformat("[Reginleif] Tried to %s type '%s' into %s of type '%s'.", String(p_operation), Variant::get_type_name(r_inout_variant.get_type()), where, Variant::get_type_name(variant_type)));
-			} else {
-				return false;
-			}
+			return _internal_convert_variant(p_variant, r_tmp_variant, p_operation, p_output_errors);
 		}
-
 		if (variant_type != Variant::OBJECT) {
-			return true;
+			return &p_variant;
 		}
-
-		return _internal_validate_object(r_inout_variant, p_operation, p_output_errors);
+		return _internal_validate_object(p_variant, p_operation, p_output_errors) ? &p_variant : nullptr;
 	}
+	bool _internal_validate_object(const Variant &p_variant, const char *p_operation, bool p_output_errors) const;
 
-	_FORCE_INLINE_ bool _internal_validate_object(const Variant &p_variant, const char *p_operation, bool p_output_errors) const {
-		ERR_FAIL_COND_V(p_variant.get_type() != Variant::OBJECT, false);
+	/// [Monarch] validates internal containers; elements inside might mutate to accommodate the given type.
+	const Variant *_validate_nested(const Variant *p_validated, Variant &r_tmp_variant, const char *p_operation, bool p_output_errors) const;
 
-#ifdef DEBUG_ENABLED
-		ObjectID object_id = p_variant;
-		if (object_id == ObjectID()) {
-			return true; // This is fine, it's null.
+	_FORCE_INLINE_ const Variant *_validate_full(const Variant &p_variant, Variant &r_tmp_variant, const char *p_operation, bool p_output_errors) const {
+		const Variant *validated = _internal_validate(p_variant, r_tmp_variant, p_operation, p_output_errors);
+		if (validated == nullptr || nested_types.is_empty()) {
+			return validated;
 		}
-		Object *object = ObjectDB::get_instance(object_id);
-		if (object == nullptr) {
-			if (p_output_errors) {
-				ERR_FAIL_V_MSG(false, vformat("Attempted to %s an invalid (previously freed?) object instance into a '%s'.", String(p_operation), String(where)));
-			} else {
-				return false;
-			}
-		}
-#else
-		Object *object = p_variant;
-		if (object == nullptr) {
-			return true; //fine
-		}
-#endif
-		if (class_name == StringName()) {
-			return true; // All good, no class type requested.
-		}
-
-		const StringName &obj_class = object->get_class_name();
-		if (obj_class != class_name && !object->is_class(class_name)) {
-			if (p_output_errors) {
-				String object_class_name = object->get_class();
-				if (const Ref<Script> other_script = object->get_script(); other_script.is_valid()) {
-					if (const StringName &script_global_name = other_script->get_global_name(); !script_global_name.is_empty()) {
-						object_class_name = script_global_name;
-					}
-				}
-				ERR_FAIL_V_MSG(false, vformat("Attempted to %s an object of type '%s' into a %s of incompatible type '%s'.", String(p_operation), object_class_name, where, String(class_name)));
-			} else {
-				return false;
-			}
-		}
-
-		if (script.is_null()) {
-			return true; // All good, no script requested.
-		}
-
-		Ref<Script> other_script = object->get_script();
-
-		// Check base script..
-		if (other_script.is_null()) {
-			if (p_output_errors) {
-				ERR_FAIL_V_MSG(false, vformat("Attempted to %s an object into a %s of incompatible type '%s'.", String(p_operation), String(where), String(script->get_class_name())));
-			} else {
-				return false;
-			}
-		}
-		if (!other_script->inherits_script(script)) {
-			if (p_output_errors) {
-				ERR_FAIL_V_MSG(false, vformat("Attempted to %s an object into a %s of incompatible type '%s'.", String(p_operation), String(where), String(script->get_class_name())));
-			} else {
-				return false;
-			}
-		}
-
-		return true;
-	}
-
-	///[Monarch] validates internal containers, and stuff passed inside the containers might mutate to accomodate the given type
-	bool _validate_nested(Variant &r_inout_variant, const char *p_operation, bool p_output_errors) const {
-
-		if (nested_types.is_empty()) {
-			return true;
-		}
-
-		if (variant_type != Variant::ARRAY && variant_type != Variant::DICTIONARY) {
-			return true;
-		}
-
-		if (variant_type == Variant::ARRAY) {
-			Array arr = r_inout_variant;
-
-			const ContainerTypeValidate& elem_type = nested_types[0];
-			for (int i = 0; i < arr.size(); i++) {
-				Variant elem = arr[i];
-				if (!(p_output_errors ? elem_type.validate(elem, p_operation) : elem_type.validate_silent(elem, p_operation))) {
-					return false;
-				}
-				arr[i] = elem;
-			}
-			r_inout_variant = arr;
-		}
-
-		if (variant_type == Variant::DICTIONARY && nested_types.size() >= 2) { ///maybe an errorr case?
-			Dictionary dict = r_inout_variant;
-			const ContainerTypeValidate& key_type = nested_types[0];
-			const ContainerTypeValidate& value_type = nested_types[1];
-			Array keys = dict.keys();
-			for (int i = 0; i < keys.size(); i++) {
-				Variant old_key = keys[i];
-				Variant new_key = old_key;
-				if (!(p_output_errors ? key_type.validate(new_key, p_operation) : key_type.validate_silent(new_key, p_operation))) {
-					return false;
-				}
-				Variant value = dict[old_key];
-				if (!(p_output_errors ? value_type.validate(value, p_operation) : value_type.validate_silent(value, p_operation))) {
-					return false;
-				}
-				if (new_key != old_key) {
-					dict.erase(old_key);
-				}
-				dict[new_key] = value;
-			}
-			r_inout_variant = dict;
-		}
-
-		/// TODO: expand to (maybe) cover generic classes?
-		return true;
+		return _validate_nested(validated, r_tmp_variant, p_operation, p_output_errors);
 	}
 
 public:
-
-	bool validate(Variant &r_inout_variant, const char *p_operation = "use") const {
-		if (!_internal_validate(r_inout_variant, p_operation, true)) {
-			return false;
-		}
-		return _validate_nested(r_inout_variant, p_operation, true);
+	// Returns a pointer to a Variant holding a compatible value.
+	// Modifies and uses r_tmp_variant if conversions are needed.
+	_FORCE_INLINE_ const Variant *validate(const Variant &p_variant, Variant &r_tmp_variant, const char *p_operation = "use") const {
+		return _validate_full(p_variant, r_tmp_variant, p_operation, true);
 	}
 
-	///was made out of necessity because both the vm and the validation layer outputted errors, leading to noise
-	_FORCE_INLINE_ bool validate_silent(Variant &r_inout_variant, const char *p_operation = "use") const {
-		if (!_internal_validate(r_inout_variant, p_operation, false)) {
-			return false;
-		}
-		return _validate_nested(r_inout_variant, p_operation, false);
+	_FORCE_INLINE_ const Variant* validate_silent(const Variant& p_variant, Variant& r_tmp_variant, const char* p_operation = "use") const {
+		return _validate_full(p_variant, r_tmp_variant, p_operation, false);
 	}
 
-	_FORCE_INLINE_ bool validate_object(const Variant &p_variant, const char *p_operation = "use") const {
+	_FORCE_INLINE_ bool validate_object(const Variant& p_variant, const char* p_operation = "use") const {
 		return _internal_validate_object(p_variant, p_operation, true);
 	}
 
 	_FORCE_INLINE_ bool test_validate(const Variant &p_variant) const {
-		Variant tmp = p_variant;
-		return _internal_validate(tmp, "", false);
+		Variant tmp;
+		return _validate_full(p_variant, tmp, "", false) != nullptr;
 	}
 
 	_FORCE_INLINE_ bool can_reference(const ContainerTypeValidate &p_type) const {

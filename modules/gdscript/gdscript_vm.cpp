@@ -51,7 +51,7 @@ static bool _gdscript_value_satisfies_trait(const Variant& p_value, const String
 		}
 
 		if (object->get_script_instance()) {
-			Script* script = object->get_script_instance()->get_script().ptr();
+			Script* script = object->get_script_instance()->get_script();
 			while (script != nullptr) {
 				GDScript* gdscript = Object::cast_to<GDScript>(script);
 				if (gdscript != nullptr && !gdscript->get_fully_qualified_name().is_empty()) {
@@ -1150,7 +1150,7 @@ Variant GDScriptFunction::call(GDScriptInstance *p_instance, const Variant **p_a
 
 				bool result = false;
 				if (object && object->get_script_instance()) {
-					Script *script_ptr = object->get_script_instance()->get_script().ptr();
+					Script *script_ptr = object->get_script_instance()->get_script();
 					while (script_ptr) {
 						if (script_ptr == script_type) {
 							result = true;
@@ -1755,7 +1755,17 @@ Variant GDScriptFunction::call(GDScriptInstance *p_instance, const Variant **p_a
 				GD_ERR_BREAK(!gdscript);
 
 				int index = _code_ptr[ip + 3];
-				GD_ERR_BREAK(index < 0 || index >= gdscript->static_variables.size());
+				if (unlikely(index < 0 || index >= gdscript->static_variables.size())) {
+#ifdef DEBUG_ENABLED
+					if (GDScriptLanguage::get_singleton()->finishing) {
+						// Just assume it's SIOF. There is a tiny possibility that something else is causing this (e.g. bug, reload).
+						err_text = vformat("Static variable does not exist anymore. Since the order in which static variables are destructed is arbitrary, consider emptying objects from them in a well-defined order manually before shutdown.");
+					} else {
+						_err_print_error(FUNCTION_STR, __FILE__, __LINE__, "Condition 'index < 0 || index >= gdscript->static_variables.size()' is true. Breaking..:");
+					}
+#endif
+					OPCODE_BREAK;
+				}
 
 				gdscript->static_variables.write[index] = *value;
 
@@ -1773,7 +1783,18 @@ Variant GDScriptFunction::call(GDScriptInstance *p_instance, const Variant **p_a
 				GD_ERR_BREAK(!gdscript);
 
 				int index = _code_ptr[ip + 3];
-				GD_ERR_BREAK(index < 0 || index >= gdscript->static_variables.size());
+
+				if (unlikely(index < 0 || index >= gdscript->static_variables.size())) {
+#ifdef DEBUG_ENABLED
+					if (GDScriptLanguage::get_singleton()->finishing) {
+						// Just assume it's SIOF. There is a tiny possibility that something else is causing this (e.g. bug, reload).
+						err_text = vformat("Static variable does not exist anymore. Since the order in which static variables are destructed is arbitrary, consider emptying objects from them in a well-defined order manually before shutdown.");
+					} else {
+						_err_print_error(FUNCTION_STR, __FILE__, __LINE__, "Condition 'index < 0 || index >= gdscript->static_variables.size()' is true. Breaking..:");
+					}
+#endif
+					OPCODE_BREAK;
+				}
 
 				*target = gdscript->static_variables[index];
 
@@ -1949,14 +1970,16 @@ Variant GDScriptFunction::call(GDScriptInstance *p_instance, const Variant **p_a
 					}
 					if (has_nested_descriptor) {
 						Variant src_variant = *src;
-						if (!expected_type.validate(src_variant, "assign")) {
+						Variant src_validated_tmp;
+						const Variant* src_validated = expected_type.validate(src_variant, src_validated_tmp, "assign");
+						if (src_validated == nullptr) {
 #ifdef DEBUG_ENABLED
 							err_text = vformat(R"(Trying to assign an array of type "%s" to a variable of type "Array[%s]".)",
 									_get_var_type(src), _get_element_type(builtin_type, native_type, *script_type));
 #endif
 							OPCODE_BREAK;
 						}
-						Array validated_src = src_variant;
+						Array validated_src = *src_validated;
 						dst_array.assign(validated_src);
 						*dst = dst_array;
 					} else {
@@ -2065,7 +2088,8 @@ Variant GDScriptFunction::call(GDScriptInstance *p_instance, const Variant **p_a
 				expected_dict_type.nested_types.push_back(expected_key_type);
 				expected_dict_type.nested_types.push_back(expected_value_type);
 				Variant src_variant = *src;
-				if (!expected_dict_type.validate_silent(src_variant, "assign")) {
+				Variant src_validated_tmp;
+				if (expected_dict_type.validate_silent(src_variant, src_validated_tmp, "assign") == nullptr) {
 #ifdef DEBUG_ENABLED
 					err_text = vformat(R"([Reginleif] Tried to assign value of type "%s" into "Dictionary[%s, %s]".)",
 							_get_var_type(&src_variant),
@@ -2153,7 +2177,7 @@ Variant GDScriptFunction::call(GDScriptInstance *p_instance, const Variant **p_a
 							OPCODE_BREAK;
 						}
 
-						Script *src_type = scr_inst->get_script().ptr();
+						Script *src_type = scr_inst->get_script();
 						bool valid = false;
 
 						while (src_type) {
@@ -2266,7 +2290,7 @@ Variant GDScriptFunction::call(GDScriptInstance *p_instance, const Variant **p_a
 					ScriptInstance *scr_inst = src->operator Object *()->get_script_instance();
 
 					if (scr_inst) {
-						Script *src_type = src->operator Object *()->get_script_instance()->get_script().ptr();
+						Script *src_type = src->operator Object *()->get_script_instance()->get_script();
 
 						while (src_type) {
 							if (src_type == base_type) {
@@ -3629,7 +3653,8 @@ Variant GDScriptFunction::call(GDScriptInstance *p_instance, const Variant **p_a
 				expected_dict_type.nested_types.push_back(expected_key_type);
 				expected_dict_type.nested_types.push_back(expected_value_type);
 				Variant return_variant = *r;
-				if (!expected_dict_type.validate_silent(return_variant, "return")) {
+				Variant return_validated_tmp;
+				if (expected_dict_type.validate_silent(return_variant, return_validated_tmp, "return") == nullptr) {
 #ifdef DEBUG_ENABLED
 					err_text = vformat(R"([Reginleif] Tried to return value of type "%s" for "Dictionary[%s, %s]".)",
 							_get_var_type(&return_variant),
@@ -3830,7 +3855,7 @@ Variant GDScriptFunction::call(GDScriptInstance *p_instance, const Variant **p_a
 						OPCODE_BREAK;
 					}
 
-					Script *ret_type = ret_obj->get_script_instance()->get_script().ptr();
+					Script *ret_type = ret_obj->get_script_instance()->get_script();
 					bool valid = false;
 
 					while (ret_type) {

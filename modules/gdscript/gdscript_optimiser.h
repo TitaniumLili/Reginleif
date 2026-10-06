@@ -69,6 +69,8 @@ public:
 	/// "can a local thingy use a slot declared at, or freed before, p_current_ip?"
 	static SlotDecision try_reuse_slot(SiblingSlotPool& r_pool, int p_current_ip, bool p_eligible_for_reuse, uint32_t p_stack_floor = UINT32_MAX, uint32_t p_locals_ceiling = UINT32_MAX);
 	static void register_freed_slot(SiblingSlotPool& r_pool, const StringName& p_name, uint32_t p_address, int p_freed_at_ip);
+	///the range registered is half open [)
+	static void register_freed_slot_range(SiblingSlotPool& r_pool, uint32_t p_base, uint32_t p_count, int p_freed_at_ip);
 
 	static uint64_t new_inline_generation();
 
